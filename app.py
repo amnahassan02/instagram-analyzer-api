@@ -44,7 +44,7 @@ class InstagramAnalyzer:
         """Initialize Chrome driver"""
         try:
             chrome_options = Options()
-            chrome_options.add_argument("--headless=new")
+            chrome_options.add_argument("--headless")
             chrome_options.add_argument("--no-sandbox")
             chrome_options.add_argument("--disable-dev-shm-usage")
             chrome_options.add_argument("--disable-gpu")
@@ -72,7 +72,7 @@ class InstagramAnalyzer:
     def login(self):
         """Login to Instagram"""
         try:
-            self.driver.get("https://www.instagram.com/accounts/login/")
+            self.driver.get("https://www.instagram.com/")
             time.sleep(3)
             
             username = os.getenv('INSTAGRAM_USERNAME')
@@ -123,7 +123,11 @@ class InstagramAnalyzer:
             # Navigate to profile
             profile_url = f"https://www.instagram.com/{username}/"
             self.driver.get(profile_url)
-            time.sleep(3)
+            time.sleep(5)
+            
+            # Check if profile exists
+            if "Sorry, this page isn't available." in self.driver.page_source:
+                return {"error": "Profile not found"}
             
             # Extract features
             features = self.extract_features(username)
@@ -161,9 +165,12 @@ class InstagramAnalyzer:
         try:
             # 1. Profile Picture
             try:
-                pic = self.driver.find_element(By.CSS_SELECTOR, "img[src*='instagram']")
-                src = pic.get_attribute('src')
-                features['profile_pic'] = 0 if 'anonymous' in src.lower() else 1
+                pics = self.driver.find_elements(By.TAG_NAME, "img")
+                for pic in pics:
+                    src = pic.get_attribute('src')
+                    if src and 'instagram' in src and 's150x150' in src:
+                        features['profile_pic'] = 1
+                        break
             except:
                 features['profile_pic'] = 0
 
@@ -176,34 +183,16 @@ class InstagramAnalyzer:
             # 3-5. Full Name
             full_name = ""
             try:
-                # Try multiple selectors for full name
-                name_selectors = [
-                    "//header//h1",
-                    "//header//section//div//span",
-                    "//header//div[2]//span"
-                ]
-                
-                for selector in name_selectors:
-                    try:
-                        element = self.driver.find_element(By.XPATH, selector)
-                        text = element.text.strip()
-                        if text and len(text) > 1 and len(text) < 50:
-                            full_name = text
-                            break
-                    except:
-                        continue
-                
-                # Clean name
-                if uname_cleaned.lower() in full_name.lower():
-                    full_name = re.sub(uname_cleaned, '', full_name, flags=re.IGNORECASE).strip()
-                
-                # Limit to 2 words
-                words = full_name.split()
-                if len(words) > 2:
-                    full_name = " ".join(words[:2])
-                    
+                # Try to find name in header
+                header = self.driver.find_element(By.TAG_NAME, "header")
+                spans = header.find_elements(By.TAG_NAME, "span")
+                for span in spans:
+                    text = span.text.strip()
+                    if text and len(text) > 1 and len(text) < 50 and text != username:
+                        full_name = text
+                        break
             except:
-                full_name = ""
+                pass
 
             features['words_fullname'] = len(full_name.split())
             num_digits_fn = sum(c.isdigit() for c in full_name)
@@ -213,10 +202,12 @@ class InstagramAnalyzer:
 
             # 6. Description length
             try:
-                bio_elements = self.driver.find_elements(By.XPATH, "//header//section//div")
+                # Look for bio text
+                header = self.driver.find_element(By.TAG_NAME, "header")
+                bio_elements = header.find_elements(By.TAG_NAME, "span")
                 for element in bio_elements:
                     text = element.text
-                    if text and len(text) > 10:  # Likely a bio
+                    if text and len(text) > 20 and text != username and text != full_name:
                         features['desc_len'] = len(text)
                         break
             except:
@@ -224,11 +215,10 @@ class InstagramAnalyzer:
 
             # 7. External URL
             try:
-                links = self.driver.find_elements(By.XPATH, "//header//a[@href]")
+                links = self.driver.find_elements(By.TAG_NAME, "a")
                 for link in links:
                     href = link.get_attribute('href')
-                    text = link.text
-                    if href and text and 'instagram.com' not in href:
+                    if href and 'instagram.com' not in href and len(link.text) > 0:
                         features['has_url'] = 1
                         break
             except:
@@ -236,18 +226,25 @@ class InstagramAnalyzer:
 
             # 8. Private account
             try:
-                private_elements = self.driver.find_elements(By.XPATH, "//*[contains(text(), 'private') or contains(text(), 'Private')]")
-                features['is_private'] = 1 if private_elements else 0
+                page_text = self.driver.page_source
+                features['is_private'] = 1 if 'This account is private' in page_text else 0
             except:
                 features['is_private'] = 0
 
-            # 9-11. Stats (simplified parsing)
+            # 9-11. Stats
             try:
-                stat_elements = self.driver.find_elements(By.XPATH, "//header//section//ul//li//span//span")
-                if len(stat_elements) >= 3:
-                    features['num_posts'] = self.parse_count(stat_elements[0].text)
-                    features['num_followers'] = self.parse_count(stat_elements[1].text)
-                    features['num_follows'] = self.parse_count(stat_elements[2].text)
+                # Look for stats in header
+                header = self.driver.find_element(By.TAG_NAME, "header")
+                stats_elements = header.find_elements(By.TAG_NAME, "span")
+                stats_text = [elem.text for elem in stats_elements if elem.text]
+                
+                for text in stats_text:
+                    if 'posts' in text.lower() or 'post' in text.lower():
+                        features['num_posts'] = self.parse_count(text)
+                    elif 'followers' in text.lower():
+                        features['num_followers'] = self.parse_count(text)
+                    elif 'following' in text.lower():
+                        features['num_follows'] = self.parse_count(text)
             except:
                 pass
 
@@ -258,15 +255,23 @@ class InstagramAnalyzer:
             return features
 
     def parse_count(self, text):
-        """Parse follower counts like 1.2K, 5.5M"""
+        """Parse counts like 1.2K, 5.5M"""
         try:
-            text = text.upper().replace(',', '')
+            text = text.upper().replace(',', '').replace(' ', '')
+            
+            # Extract numbers
+            numbers = re.findall(r'[\d\.]+', text)
+            if not numbers:
+                return 0
+                
+            num = float(numbers[0])
+            
             if 'K' in text:
-                return int(float(text.replace('K', '')) * 1000)
+                return int(num * 1000)
             elif 'M' in text:
-                return int(float(text.replace('M', '')) * 1000000)
+                return int(num * 1000000)
             else:
-                return int(text) if text.replace('.', '').isdigit() else 0
+                return int(num)
         except:
             return 0
 
@@ -310,12 +315,7 @@ class InstagramAnalyzer:
                 'verdict': "ERROR"
             }
 
-    def close(self):
-        """Close driver"""
-        if self.driver:
-            self.driver.quit()
-
-# Initialize analyzer
+# Global analyzer instance
 analyzer = InstagramAnalyzer()
 
 @app.route('/')
@@ -358,17 +358,6 @@ def analyze():
     except Exception as e:
         logger.error(f"Analysis error: {str(e)}")
         return jsonify({"error": f"Analysis failed: {str(e)}"}), 500
-
-@app.before_request
-def before_request():
-    """Initialize driver before first request if needed"""
-    if not analyzer.driver:
-        analyzer.init_driver()
-
-@app.teardown_appcontext
-def close_driver(exception=None):
-    """Close driver when app shuts down"""
-    analyzer.close()
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
