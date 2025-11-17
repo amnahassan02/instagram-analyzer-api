@@ -25,7 +25,6 @@ class InstagramAnalyzer:
         self.driver = None
         self.model = None
         self.scaler = None
-        self.expected_features = None
         self.load_model()
     
     def load_model(self):
@@ -33,8 +32,6 @@ class InstagramAnalyzer:
         try:
             self.model = joblib.load('random_forest_model.joblib')
             self.scaler = joblib.load('scaler.joblib')
-            with open('feature_names.txt', 'r') as f:
-                self.expected_features = f.read().split(',')
             logger.info("ML model loaded successfully")
         except Exception as e:
             logger.error(f"Failed to load ML model: {str(e)}")
@@ -60,52 +57,12 @@ class InstagramAnalyzer:
             chrome_options.add_argument(f"user-agent={ua}")
             
             self.driver = webdriver.Chrome(options=chrome_options)
-            self.driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
             
             logger.info("Chrome driver initialized successfully")
             return True
             
         except Exception as e:
             logger.error(f"Failed to initialize driver: {str(e)}")
-            return False
-
-    def login(self):
-        """Login to Instagram"""
-        try:
-            self.driver.get("https://www.instagram.com/")
-            time.sleep(3)
-            
-            username = os.getenv('INSTAGRAM_USERNAME')
-            password = os.getenv('INSTAGRAM_PASSWORD')
-            
-            if not username or not password:
-                raise Exception("Instagram credentials not found in environment")
-            
-            # Find login fields
-            username_field = WebDriverWait(self.driver, 10).until(
-                EC.presence_of_element_located((By.NAME, "username")))
-            password_field = self.driver.find_element(By.NAME, "password")
-            
-            username_field.send_keys(username)
-            password_field.send_keys(password)
-            password_field.send_keys(Keys.ENTER)
-            
-            logger.info("Login submitted")
-            time.sleep(5)
-            
-            # Handle pop-ups
-            try:
-                not_now_btn = WebDriverWait(self.driver, 5).until(
-                    EC.element_to_be_clickable((By.XPATH, "//button[contains(., 'Not Now')]")))
-                not_now_btn.click()
-                time.sleep(2)
-            except TimeoutException:
-                pass
-                
-            return True
-            
-        except Exception as e:
-            logger.error(f"Login failed: {str(e)}")
             return False
 
     def analyze_profile(self, username):
@@ -115,10 +72,6 @@ class InstagramAnalyzer:
             if not self.driver:
                 if not self.init_driver():
                     return {"error": "Failed to initialize browser"}
-            
-            # Login if needed
-            if not self.login():
-                return {"error": "Failed to login to Instagram"}
             
             # Navigate to profile
             profile_url = f"https://www.instagram.com/{username}/"
@@ -163,14 +116,11 @@ class InstagramAnalyzer:
         }
         
         try:
-            # 1. Profile Picture
+            # 1. Profile Picture - just check if any image exists in header
             try:
-                pics = self.driver.find_elements(By.TAG_NAME, "img")
-                for pic in pics:
-                    src = pic.get_attribute('src')
-                    if src and 'instagram' in src and 's150x150' in src:
-                        features['profile_pic'] = 1
-                        break
+                header = self.driver.find_element(By.TAG_NAME, "header")
+                images = header.find_elements(By.TAG_NAME, "img")
+                features['profile_pic'] = 1 if len(images) > 0 else 0
             except:
                 features['profile_pic'] = 0
 
@@ -180,12 +130,11 @@ class InstagramAnalyzer:
             len_un = len(uname_cleaned)
             features['nums_per_len_username'] = round(num_digits_un / len_un, 2) if len_un else 0
 
-            # 3-5. Full Name
+            # 3-5. Full Name - simplified
             full_name = ""
             try:
-                # Try to find name in header
-                header = self.driver.find_element(By.TAG_NAME, "header")
-                spans = header.find_elements(By.TAG_NAME, "span")
+                # Just look for any span text that might be a name
+                spans = self.driver.find_elements(By.TAG_NAME, "span")
                 for span in spans:
                     text = span.text.strip()
                     if text and len(text) > 1 and len(text) < 50 and text != username:
@@ -200,25 +149,20 @@ class InstagramAnalyzer:
             features['nums_per_len_fullname'] = round(num_digits_fn / len_fn, 2) if len_fn else 0
             features['name_eq_username'] = 1 if full_name.replace(" ", "").lower() == username.lower() else 0
 
-            # 6. Description length
+            # 6. Description length - simplified
             try:
-                # Look for bio text
+                # Count all text in header as description
                 header = self.driver.find_element(By.TAG_NAME, "header")
-                bio_elements = header.find_elements(By.TAG_NAME, "span")
-                for element in bio_elements:
-                    text = element.text
-                    if text and len(text) > 20 and text != username and text != full_name:
-                        features['desc_len'] = len(text)
-                        break
+                features['desc_len'] = len(header.text)
             except:
                 features['desc_len'] = 0
 
-            # 7. External URL
+            # 7. External URL - simplified
             try:
                 links = self.driver.find_elements(By.TAG_NAME, "a")
                 for link in links:
                     href = link.get_attribute('href')
-                    if href and 'instagram.com' not in href and len(link.text) > 0:
+                    if href and 'instagram.com' not in href:
                         features['has_url'] = 1
                         break
             except:
@@ -231,22 +175,28 @@ class InstagramAnalyzer:
             except:
                 features['is_private'] = 0
 
-            # 9-11. Stats
+            # 9-11. Stats - look for numbers in the page
             try:
-                # Look for stats in header
-                header = self.driver.find_element(By.TAG_NAME, "header")
-                stats_elements = header.find_elements(By.TAG_NAME, "span")
-                stats_text = [elem.text for elem in stats_elements if elem.text]
+                # Look for common patterns
+                page_text = self.driver.page_source
                 
-                for text in stats_text:
-                    if 'posts' in text.lower() or 'post' in text.lower():
-                        features['num_posts'] = self.parse_count(text)
-                    elif 'followers' in text.lower():
-                        features['num_followers'] = self.parse_count(text)
-                    elif 'following' in text.lower():
-                        features['num_follows'] = self.parse_count(text)
-            except:
-                pass
+                # Posts pattern
+                posts_match = re.search(r'(\d+[KM]?)\s*posts?', page_text, re.IGNORECASE)
+                if posts_match:
+                    features['num_posts'] = self.parse_count(posts_match.group(1))
+                
+                # Followers pattern  
+                followers_match = re.search(r'(\d+[KM]?)\s*followers', page_text, re.IGNORECASE)
+                if followers_match:
+                    features['num_followers'] = self.parse_count(followers_match.group(1))
+                
+                # Following pattern
+                following_match = re.search(r'(\d+[KM]?)\s*following', page_text, re.IGNORECASE)
+                if following_match:
+                    features['num_follows'] = self.parse_count(following_match.group(1))
+                    
+            except Exception as e:
+                logger.error(f"Stats parsing error: {e}")
 
             return features
             
