@@ -1,1 +1,8 @@
-profile pic,nums/length username,fullname words,nums/length fullname,name==username,description length,external URL,private,#posts,#followers,#follows
+Flask==2.3.3
+selenium==4.15.2
+joblib==1.3.2
+numpy==1.26.4
+scikit-learn==1.4.0
+gunicorn==21.2.0
+chromedriver-autoinstaller==0.6.4
+webdriver-manager==4.0.1
