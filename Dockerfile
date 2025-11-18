@@ -12,12 +12,11 @@ RUN apt-get update && apt-get install -y \
     && apt-get install -y google-chrome-stable \
     && rm -rf /var/lib/apt/lists/*
 
-# Get Chrome version and install matching ChromeDriver MANUALLY
-RUN CHROME_VERSION=$(google-chrome --version | grep -oP '\d+\.\d+\.\d+\.\d+') \
+# Install ChromeDriver MANUALLY (more reliable)
+RUN CHROME_VERSION=$(google-chrome --version | grep -oP '[0-9]+\.[0-9]+\.[0-9]+' | head -1) \
     && echo "Chrome version: $CHROME_VERSION" \
-    && CHROME_MAJOR_VERSION=$(echo $CHROME_VERSION | cut -d. -f1) \
-    && echo "Chrome major version: $CHROME_MAJOR_VERSION" \
-    # Download ChromeDriver from the correct URL structure
+    && MAJOR_VERSION=$(echo $CHROME_VERSION | cut -d. -f1) \
+    && echo "Major version: $MAJOR_VERSION" \
     && wget -q "https://storage.googleapis.com/chrome-for-testing-public/$CHROME_VERSION/linux64/chromedriver-linux64.zip" \
     && unzip -q chromedriver-linux64.zip -d /tmp/ \
     && mv /tmp/chromedriver-linux64/chromedriver /usr/local/bin/ \
