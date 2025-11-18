@@ -20,7 +20,7 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy application files
+# Copy application files (including the required model files: random_forest_model.joblib, scaler.joblib, feature_names.txt)
 COPY . .
 
 # Expose port
