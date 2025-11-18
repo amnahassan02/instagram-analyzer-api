@@ -1,6 +1,6 @@
 FROM python:3.9-slim
 
-# Install Chrome and dependencies
+# Install system dependencies
 RUN apt-get update && apt-get install -y \
     wget \
     curl \
@@ -12,8 +12,18 @@ RUN apt-get update && apt-get install -y \
     && apt-get install -y google-chrome-stable \
     && rm -rf /var/lib/apt/lists/*
 
-# Use webdriver-manager to auto-download correct ChromeDriver
-RUN pip install webdriver-manager
+# Install matching ChromeDriver version
+RUN CHROME_VERSION=$(google-chrome --version | grep -oP '\d+\.\d+\.\d+\.\d+' | head -1) \
+    && echo "Installed Chrome version: $CHROME_VERSION" \
+    && CHROME_MAJOR_VERSION=$(echo $CHROME_VERSION | cut -d. -f1) \
+    && echo "Chrome major version: $CHROME_MAJOR_VERSION" \
+    && CHROMEDRIVER_VERSION=$(curl -s "https://chromedriver.storage.googleapis.com/LATEST_RELEASE_$CHROME_MAJOR_VERSION") \
+    && echo "Downloading ChromeDriver version: $CHROMEDRIVER_VERSION" \
+    && wget -q "https://chromedriver.storage.googleapis.com/$CHROMEDRIVER_VERSION/chromedriver_linux64.zip" \
+    && unzip chromedriver_linux64.zip -d /usr/local/bin/ \
+    && rm chromedriver_linux64.zip \
+    && chmod +x /usr/local/bin/chromedriver \
+    && echo "ChromeDriver installed successfully"
 
 # Set working directory
 WORKDIR /app
