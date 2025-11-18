@@ -46,7 +46,7 @@ class InstagramAnalyzer:
             logger.error(f"Failed to load ML model: {str(e)}")
             self.model_loaded = False
 
-    def init_driver(self):
+     def init_driver(self):
         """Initialize Chrome driver with automatic ChromeDriver management"""
         try:
             chrome_options = Options()
@@ -62,8 +62,22 @@ class InstagramAnalyzer:
             chrome_options.add_argument("--no-sandbox")
             chrome_options.add_argument("--disable-dev-shm-usage")
 
+            # --- VITAL FIX ---
             # Use webdriver-manager to automatically handle ChromeDriver version
-            service = Service(ChromeDriverManager().install())
+            # The .install() path is sometimes wrong (points to the NOTICE file). 
+            # We hack the string to point to the actual 'chromedriver' executable.
+            driver_path = ChromeDriverManager().install()
+            
+            # Correct the path if it points to the THIRD_PARTY_NOTICES.chromedriver file
+            if 'THIRD_PARTY_NOTICES.chromedriver' in driver_path:
+                correct_path = driver_path.replace('THIRD_PARTY_NOTICES.chromedriver', 'chromedriver')
+            elif os.path.isdir(driver_path): # Handle the case where WDM returns the directory path
+                 correct_path = os.path.join(driver_path, 'chromedriver')
+            else:
+                 correct_path = driver_path
+
+
+            service = Service(correct_path)
             self.driver = webdriver.Chrome(service=service, options=chrome_options)
             
             self.driver.get("https://www.instagram.com/")
@@ -440,3 +454,4 @@ def analyze():
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port, debug=False)
+
