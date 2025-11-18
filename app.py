@@ -49,7 +49,7 @@ class InstagramAnalyzer:
             self.model_loaded = False
 
     def init_driver(self):
-        """Initialize Chrome driver with automatic ChromeDriver management"""
+        """Initialize Chrome driver with automatic ChromeDriver management and path correction."""
         try:
             chrome_options = Options()
             chrome_options.add_argument("--headless=new")
@@ -64,29 +64,39 @@ class InstagramAnalyzer:
             chrome_options.add_argument("--no-sandbox")
             chrome_options.add_argument("--disable-dev-shm-usage")
 
-            # --- VITAL CORRECTION START ---
+            # --- VITAL CORRECTION ---
             # Use webdriver-manager to automatically handle ChromeDriver version
-            driver_path = ChromeDriverManager().install()
+            # Use Service object path installation approach for better path resolution
+            try:
+                # This should resolve to the path of the executable.
+                driver_path = ChromeDriverManager().install()
+            except Exception as e:
+                logger.error(f"WDM installation failed, trying local path: {e}")
+                # Fallback path if WDM fails, but WDM is preferred in this setup
+                driver_path = "/usr/bin/chromedriver" 
             
-            # Correct the path if it points to the THIRD_PARTY_NOTICES.chromedriver file (the error source)
+            # --- PATH CORRECTION LOGIC ---
+            # 1. Correct the path if it points to the THIRD_PARTY_NOTICES.chromedriver file
             if 'THIRD_PARTY_NOTICES.chromedriver' in driver_path:
-                # Replace the incorrect file name with the actual executable name
                 correct_path = driver_path.replace('THIRD_PARTY_NOTICES.chromedriver', 'chromedriver')
-            elif os.path.isdir(driver_path): 
-                 # If WDM returns the directory path (e.g., .../chromedriver-linux64), append 'chromedriver'
+            # 2. If WDM returns the directory path, append 'chromedriver'
+            elif os.path.isdir(driver_path) and not driver_path.endswith('chromedriver'): 
                  correct_path = os.path.join(driver_path, 'chromedriver')
             else:
                  correct_path = driver_path
-
-            # Ensure the corrected path is executable
+                 
+            logger.info(f"Using ChromeDriver path: {correct_path}")
+                 
+            # Ensure the corrected path is executable and exists
             if not os.path.exists(correct_path):
                  raise FileNotFoundError(f"Corrected chromedriver path not found: {correct_path}")
                  
-            os.chmod(correct_path, 0o755) # Make sure it's executable
+            # Explicitly set permissions, which is often required in Docker containers
+            os.chmod(correct_path, 0o755) 
             
             service = Service(correct_path)
             self.driver = webdriver.Chrome(service=service, options=chrome_options)
-            # --- VITAL CORRECTION END ---
+            # --- END CORRECTION ---
             
             self.driver.get("https://www.instagram.com/")
             logger.info("Chrome driver initialized successfully")
@@ -97,7 +107,7 @@ class InstagramAnalyzer:
             return False
 
     def login(self):
-        """Login to Instagram - EXACT match to your original code"""
+        """Login to Instagram"""
         try:
             time.sleep(2)
             
@@ -105,12 +115,8 @@ class InstagramAnalyzer:
             password = os.getenv('INSTAGRAM_PASSWORD')
             
             if not username or not password:
-                # If credentials are missing, we cannot proceed with a proper login
-                # The check for logged-in status after driver.get("/") is implicitly failing without a real user
-                # We will continue and rely on Instagram's public profile view/login wall handling
                 logger.warning("Instagram credentials not found, attempting to bypass login.")
-                # We can try to skip login but Instagram may block scraping without it.
-                return True # Optimistically return True to continue analysis attempt
+                return True
 
             username_field = WebDriverWait(self.driver, 10).until(
                 EC.element_to_be_clickable((By.CSS_SELECTOR, "input[name='username']")))
@@ -124,16 +130,16 @@ class InstagramAnalyzer:
             password_field.send_keys(password)
 
             password_field.send_keys(Keys.ENTER)
-            logger.info("Login submitted using Keys.ENTER.")
+            logger.info("Login submitted.")
             time.sleep(5)
 
-            # Handle pop-up exactly like your code
             try:
+                # Handle "Save Your Login Info?" pop-up
                 not_now_button = WebDriverWait(self.driver, 5).until(
                     EC.element_to_be_clickable((By.XPATH, "//button[contains(., 'Not Now')]"))
                 )
                 not_now_button.click()
-                logger.info("Clicked 'Not Now' on pop-up.")
+                logger.info("Clicked 'Not Now' on 'Save Login Info' pop-up.")
                 time.sleep(2)
             except TimeoutException:
                 pass
@@ -145,31 +151,27 @@ class InstagramAnalyzer:
             return False
 
     def extract_profile_picture(self, username):
-        """EXACT replica of your profile picture extraction with base64"""
+        """Extracts profile picture status and base64 data."""
         try:
-            # 1. Locate the profile picture element
-            # Instagram structure is highly unstable. Try common selectors.
             try:
+                 # Attempt to find the profile picture element
                  pic = WebDriverWait(self.driver, 5).until(
                     EC.presence_of_element_located((By.CSS_SELECTOR, "img[alt$=\"'s profile picture\"], header img[alt*='profile']"))
                 )
             except TimeoutException:
                  try:
-                     # Fallback for logged-out/public view
                      pic = self.driver.find_element(By.CSS_SELECTOR, "header img[alt*='profile']")
                  except NoSuchElementException:
                      pic = self.driver.find_element(By.CSS_SELECTOR, "._aadg img[alt*='profile']")
 
-            # Get the source URL now for the final status check
             src = pic.get_attribute('src')
 
-            # 2. Use JavaScript to extract image data as Base64 string
             js_script = """
                 var img = arguments[0];
                 var canvas = document.createElement('canvas');
-                canvas.width = img.naturalWidth || img.clientWidth; // Use clientWidth as fallback
+                canvas.width = img.naturalWidth || img.clientWidth;
                 canvas.height = img.naturalHeight || img.clientHeight;
-                if(canvas.width === 0 || canvas.height === 0) return null; // Handle invisible/unloaded images
+                if(canvas.width === 0 || canvas.height === 0) return null;
                 canvas.getContext('2d').drawImage(img, 0, 0);
                 return canvas.toDataURL('image/jpeg');
             """
@@ -178,20 +180,18 @@ class InstagramAnalyzer:
             if not base64_data:
                  raise ValueError("Could not extract image data via canvas.")
 
-            # 3. Decode the image
-            base64_content = base64_data.split(',')[1]  # Strip the header
+            base64_content = base64_data.split(',')[1]
 
-            # 4. Set status based on default picture check - EXACT same logic
-            # This hash is specific to the default Instagram placeholder
+            # Check if it's the default Instagram placeholder
             if 'ig_cache_key=YW5vbnltb3VzX3Byb2ZpbGVfcGlj' in src or len(base64_content) < 5000:
-                profile_pic = 0  # Default or tiny placeholder picture
+                profile_pic = 0
             else:
-                profile_pic = 1  # Custom picture
+                profile_pic = 1
 
             return {
                 'profile_pic': profile_pic,
-                'image_base64': base64_data,  # Return full base64 data with header
-                'image_data': base64_content  # Return just the base64 content
+                'image_base64': base64_data,
+                'image_data': base64_content
             }
                 
         except NoSuchElementException:
@@ -202,24 +202,25 @@ class InstagramAnalyzer:
             return {'profile_pic': 0, 'image_base64': None, 'image_data': None}
 
     def extract_features(self, username):
-        """EXACT replica of your feature extraction logic"""
+        """Extracts all necessary features for the ML model."""
         features = {}
         
         # 1) Profile Picture
         pic_result = self.extract_profile_picture(username)
         features['profile_pic'] = pic_result['profile_pic']
         
-        # 2) username metrics - EXACT same logic
+        # 2) username metrics
         uname_raw = username 
         uname_cleaned = re.sub(r'[^\w]', '', uname_raw)
         num_digits_un = sum(c.isdigit() for c in uname_cleaned)
         len_un = len(uname_cleaned)
         features['nums_per_len_username'] = round(num_digits_un / len_un, 2) if len_un else 0
         
-        # 3–4) full name words and digits/length - EXACT same logic
+        # 3–5) full name metrics (words, digits/length, name == username)
+        full_name = ""
         try:
+            # Attempt to find the displayed profile name
             selectors = [
-                # Try common selectors for the displayed name (not the username)
                 "//header//div[2]//span/div[1]/span", 
                 "//header//h1",  
                 "//header//div[contains(@class, '_aacx')]//span",
@@ -227,66 +228,48 @@ class InstagramAnalyzer:
                 "//header//div[contains(@class, '_aac')]//span[1]",
             ]
             
-            full_name_raw = ""
-            
             for selector in selectors:
                 try:
                     element = self.driver.find_element(By.XPATH, selector)
                     text = element.text.strip()
                     
                     if (text and 
-                        not text.startswith('@') and # Ignore username if accidentally selected
+                        not text.startswith('@') and 
                         not text.startswith('#') and
                         "posts" not in text.lower() and
-                        "followers" not in text.lower() and
-                        "following" not in text.lower() and
                         1 < len(text) < 50):
                         
-                        full_name_raw = text
+                        full_name = text
+                        
+                        # Apply maximum two words rule
+                        if len(full_name.split()) > 2:
+                            full_name = " ".join(full_name.split()[:2])
+                            
                         break
                         
                 except NoSuchElementException:
                     continue
             
-            if full_name_raw:
-                # Remove the username part if it's appended to the full name
-                if uname_cleaned and uname_cleaned.lower() in full_name_raw.lower():
-                    pattern = r'\s*' + re.escape(uname_cleaned) + r'\s*$'
-                    full_name = re.sub(pattern, '', full_name_raw, flags=re.IGNORECASE).strip()
-                else:
-                    full_name = full_name_raw
-                
-                if len(full_name.split()) > 2:
-                    full_name = " ".join(full_name.split()[:2])
-            else:
-                full_name = ""
-                
-        except NoSuchElementException:
-            full_name = ""
         except Exception as e:
-            logger.error(f"Unexpected error finding profile name: {e}")
-            full_name = ""
+            logger.error(f"Error finding profile name: {e}")
 
         features['words_fullname'] = len(full_name.split())
         num_digits_fn = sum(c.isdigit() for c in full_name)
         len_fn = len(full_name)
         features['nums_per_len_fullname'] = round(num_digits_fn / len_fn, 2) if len_fn else 0
         
-        # 5) name == username? - EXACT same logic
         features['name_eq_username'] = 1 if full_name.replace(" ", "").lower() == uname_raw.lower() else 0
         
-        # 6) description length - EXACT same selector
+        # 6) description length
         try:
-            # Note: This selector is prone to breaking with Instagram updates
             bio = self.driver.find_element(By.CSS_SELECTOR, "._ap3a._aaco._aacu._aacx._aad7._aade")
             description = bio.get_attribute("innerText")
             features['desc_len'] = len(description)
         except NoSuchElementException:
             features['desc_len'] = 0
         
-        # 7) external URL present? - EXACT same logic
+        # 7) external URL present?
         try:
-            # Note: This selector is prone to breaking with Instagram updates
             url_el = self.driver.find_element(By.XPATH, "//div[contains(@class,'x3nfvp2')]//a[@href]")
             features['has_url'] = 1 if url_el.text.strip() != "" else 0
         except NoSuchElementException:
@@ -295,17 +278,16 @@ class InstagramAnalyzer:
             logger.error(f"URL detection error: {str(e)}")
             features['has_url'] = 0
         
-        # 8) private account? - EXACT same logic
+        # 8) private account?
         try:
             self.driver.find_element(By.XPATH, "//span[text()=\"This account is private\"]")
             features['is_private'] = 1
         except NoSuchElementException:
             features['is_private'] = 0
         
-        # 9–11) posts, followers, following - EXACT same function
+        # 9–11) posts, followers, following
         def get_stat(kind):
             try:
-                # Selectors for stats are highly volatile
                 if kind == "posts":
                     el = self.driver.find_element(By.XPATH, "//div[span[contains(text(),'posts')]]//span/span | //li[contains(.,'posts')]//span/span")
                 elif kind == "followers":
@@ -341,7 +323,7 @@ class InstagramAnalyzer:
         return features
 
     def predict(self, features):
-        """EXACT same prediction logic as your original code"""
+        """Makes a prediction using the loaded ML model."""
         if not self.model_loaded:
             return {
                 'is_fake': False,
@@ -351,7 +333,6 @@ class InstagramAnalyzer:
             }
         
         try:
-            # Ensure the feature order matches the expected features list
             feature_list = [
                 features['profile_pic'],
                 features['nums_per_len_username'],
@@ -370,25 +351,18 @@ class InstagramAnalyzer:
                 raise ValueError("Mismatch in number of features!")
             
             sample_input = np.array([feature_list])
-            # The scaler must be fitted on the training data used for the model
             sample_input_scaled = self.scaler.transform(sample_input)
             
-            # Prediction
             prob = self.model.predict_proba(sample_input_scaled)[0]
             predicted_class = self.model.predict(sample_input_scaled)[0]
             
-            # Authenticity score calculation
             authenticity_score = round(prob[0] * 10)
             
-            if predicted_class == 0:
-                verdict = "GENUINE"
-            else:
-                verdict = "FAKE"
+            verdict = "GENUINE" if predicted_class == 0 else "FAKE"
             
             return {
                 'is_fake': bool(predicted_class),
                 'authenticity_score': authenticity_score,
-                # Confidence in class 0 (GENUINE)
                 'confidence': float(prob[0]),
                 'verdict': verdict
             }
@@ -405,28 +379,20 @@ class InstagramAnalyzer:
     def analyze_profile(self, username):
         """Main analysis function"""
         try:
-            # Initialize driver if not already done
             if not self.driver:
                 if not self.init_driver():
-                    # The error originates here
                     return {"error": "Failed to initialize browser"}
             
-            # Login if needed (This is often unreliable and may be skipped if env vars aren't set)
             if not self.login():
                 return {"error": "Failed to login to Instagram"}
             
-            # Navigate to profile - EXACT same as your code
             profile_url = f"https://www.instagram.com/{username}/"
             self.driver.get(profile_url)
             
-            # Wait for content to load. Header is usually a good indicator.
             WebDriverWait(self.driver, 15).until(EC.presence_of_element_located((By.TAG_NAME, 'header')))
             
-            # Extract features
             pic_result = self.extract_profile_picture(username)
             features = self.extract_features(username)
-            
-            # Make prediction
             prediction = self.predict(features)
             
             return {
@@ -435,7 +401,7 @@ class InstagramAnalyzer:
                 "features": features,
                 "profile_picture": {
                     "has_custom_picture": bool(pic_result['profile_pic']),
-                    "image_base64": pic_result['image_base64']  # Full base64 with data URL
+                    "image_base64": pic_result['image_base64']
                 },
                 "timestamp": datetime.now().isoformat()
             }
@@ -444,19 +410,16 @@ class InstagramAnalyzer:
             logger.error(f"Analysis failed: {str(e)}")
             return {"error": f"Analysis failed: {str(e)}"}
         finally:
-            # IMPORTANT: Close the driver after use to free up resources, 
-            # especially important in stateless environments like Railway.
             if self.driver:
                 self.driver.quit()
-                self.driver = None # Reset for next request
+                self.driver = None
 
-# Global analyzer instance - Note: The `driver` is initialized inside `analyze_profile` now.
 analyzer = InstagramAnalyzer()
 
 @app.route('/')
 def home():
     return jsonify({
-        "message": "Instagram Profile Analyzer API - EXACT Replica with fix", 
+        "message": "Instagram Profile Analyzer API - FIXED Version", 
         "status": "running",
         "model_loaded": analyzer.model_loaded,
         "endpoints": {
@@ -491,6 +454,7 @@ def analyze():
         result = analyzer.analyze_profile(username)
         
         if 'error' in result:
+            # Propagate the 500 error if analysis fails
             return jsonify(result), 500
             
         return jsonify(result)
