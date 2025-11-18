@@ -62,7 +62,7 @@ class InstagramAnalyzer:
             chrome_options.add_argument("--no-sandbox")
             chrome_options.add_argument("--disable-dev-shm-usage")
 
-            # Use webdriver-manager to automatically get correct ChromeDriver
+            # Use webdriver-manager to automatically handle ChromeDriver version
             service = Service(ChromeDriverManager().install())
             self.driver = webdriver.Chrome(service=service, options=chrome_options)
             
