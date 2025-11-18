@@ -16,19 +16,15 @@ RUN apt-get update && apt-get install -y \
 
 # Install Chrome and dependencies using the modern key/repository method
 RUN set -ex; \
-    # Create the directory for keyrings if it doesn't exist
     mkdir -p /etc/apt/keyrings; \
-    # Download the Google signing key and save it directly to the keyrings directory
     wget -q -O /etc/apt/keyrings/google-chrome.gpg https://dl.google.com/linux/linux_signing_key.pub; \
-    # Add the Chrome repository list file, referencing the GPG key location
     echo "deb [arch=amd64 signed-by=/etc/apt/keyrings/google-chrome.gpg] http://dl.google.com/linux/chrome/deb/ stable main" >> /etc/apt/sources.list.d/google.list; \
-    # Install Chrome and clean up
     apt-get update; \
     apt-get install -y google-chrome-stable; \
     rm -rf /var/lib/apt/lists/*
 
-# Install ChromeDriver matching Chrome version
-RUN CHROME_VERSION=$(google-chrome --version | grep -oP '[0-9]+\.[0-9]+\.[0-9]+' | head -1) \
+# Install ChromeDriver matching Chrome version (FIXED PATH)
+RUN CHROME_VERSION=$(/usr/bin/google-chrome --version | grep -oP '[0-9]+\.[0-9]+\.[0-9]+' | head -1) \
     && MAJOR_VERSION=$(echo $CHROME_VERSION | cut -d. -f1) \
     && CHROMEDRIVER_VERSION=$(curl -s "https://chromedriver.storage.googleapis.com/LATEST_RELEASE_$MAJOR_VERSION") \
     && wget -q "https://chromedriver.storage.googleapis.com/$CHROMEDRIVER_VERSION/chromedriver_linux64.zip" \
