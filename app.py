@@ -59,6 +59,11 @@ class InstagramAnalyzer:
             ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
             chrome_options.add_argument(f"user-agent={ua}")
             
+            # Add these for better stability
+            chrome_options.add_argument("--disable-extensions")
+            chrome_options.add_argument("--disable-plugins")
+            chrome_options.add_argument("--disable-images")
+            
             self.driver = webdriver.Chrome(options=chrome_options)
             self.driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
             
@@ -70,10 +75,10 @@ class InstagramAnalyzer:
             return False
 
     def login(self):
-        """Login to Instagram - YOUR ORIGINAL LOGIC"""
+        """Login to Instagram"""
         try:
-            self.driver.get("https://www.instagram.com/")
-            time.sleep(3)
+            self.driver.get("https://www.instagram.com/accounts/login/")
+            time.sleep(5)
             
             username = os.getenv('INSTAGRAM_USERNAME')
             password = os.getenv('INSTAGRAM_PASSWORD')
@@ -81,26 +86,48 @@ class InstagramAnalyzer:
             if not username or not password:
                 raise Exception("Instagram credentials not found in environment")
             
-            # Find login fields - YOUR ORIGINAL SELECTORS
-            username_field = WebDriverWait(self.driver, 15).until(
-                EC.element_to_be_clickable((By.CSS_SELECTOR, "input[name='username']")))
-            password_field = WebDriverWait(self.driver, 15).until(
-                EC.element_to_be_clickable((By.CSS_SELECTOR, "input[name='password']")))
-
-            username_field.clear()
+            # Wait for page to load
+            time.sleep(3)
+            
+            # Find login fields - try multiple selectors
+            selectors = [
+                "input[name='username']",
+                "input[aria-label='Phone number, username, or email']",
+                "input[placeholder='Phone number, username, or email']"
+            ]
+            
+            username_field = None
+            for selector in selectors:
+                try:
+                    username_field = WebDriverWait(self.driver, 10).until(
+                        EC.presence_of_element_located((By.CSS_SELECTOR, selector)))
+                    break
+                except:
+                    continue
+            
+            if not username_field:
+                raise Exception("Could not find username field")
+            
+            password_field = self.driver.find_element(By.CSS_SELECTOR, "input[name='password'], input[aria-label='Password'], input[placeholder='Password']")
+            
             username_field.send_keys(username)
             time.sleep(1)
-            password_field.clear()
             password_field.send_keys(password)
+            time.sleep(1)
             password_field.send_keys(Keys.ENTER)
             
             logger.info("Login submitted")
-            time.sleep(5)
-
-            # Handle pop-ups - YOUR ORIGINAL LOGIC
+            time.sleep(8)  # Wait longer for login
+            
+            # Check if login was successful
+            if "login" in self.driver.current_url.lower():
+                logger.error("Login may have failed - still on login page")
+                return False
+                
+            # Handle pop-ups
             try:
                 not_now_btn = WebDriverWait(self.driver, 10).until(
-                    EC.element_to_be_clickable((By.XPATH, "//button[contains(., 'Not Now')]")))
+                    EC.element_to_be_clickable((By.XPATH, "//button[contains(., 'Not Now') or contains(., 'Not now')]")))
                 not_now_btn.click()
                 logger.info("Clicked 'Not Now' on pop-up")
                 time.sleep(2)
@@ -111,10 +138,15 @@ class InstagramAnalyzer:
             
         except Exception as e:
             logger.error(f"Login failed: {str(e)}")
+            # Take screenshot for debugging
+            try:
+                self.driver.save_screenshot("/tmp/login_error.png")
+            except:
+                pass
             return False
 
     def analyze_profile(self, username):
-        """Main analysis function - KEEPS YOUR ORIGINAL SCRAPING LOGIC"""
+        """Main analysis function"""
         try:
             # Initialize driver if not already done
             if not self.driver:
@@ -122,18 +154,24 @@ class InstagramAnalyzer:
                     return {"error": "Failed to initialize browser"}
             
             # Login if needed
-            if not self.login():
-                return {"error": "Failed to login to Instagram"}
+            login_success = self.login()
+            if not login_success:
+                return {"error": "Failed to login to Instagram. Check credentials."}
             
             # Navigate to profile
             profile_url = f"https://www.instagram.com/{username}/"
             self.driver.get(profile_url)
+            time.sleep(5)
             
-            # Wait for profile to load - YOUR ORIGINAL LOGIC
-            WebDriverWait(self.driver, 15).until(
-                EC.presence_of_element_located((By.TAG_NAME, 'header')))
+            # Check if profile exists
+            page_source = self.driver.page_source
+            if "Sorry, this page isn't available." in page_source:
+                return {"error": "Profile not found or doesn't exist"}
             
-            # Extract features using YOUR original logic
+            if "Page Not Found" in page_source:
+                return {"error": "Profile not found"}
+            
+            # Extract features
             features = self.extract_features(username)
             
             # Make prediction
@@ -151,73 +189,79 @@ class InstagramAnalyzer:
             return {"error": f"Analysis failed: {str(e)}"}
 
     def extract_features(self, username):
-        """YOUR ORIGINAL FEATURE EXTRACTION LOGIC"""
-        features = {}
+        """Extract profile features"""
+        features = {
+            'profile_pic': 0,
+            'nums_per_len_username': 0,
+            'words_fullname': 0,
+            'nums_per_len_fullname': 0,
+            'name_eq_username': 0,
+            'desc_len': 0,
+            'has_url': 0,
+            'is_private': 0,
+            'num_posts': 0,
+            'num_followers': 0,
+            'num_follows': 0
+        }
         
         try:
-            # 1. Profile Picture - YOUR ORIGINAL LOGIC
+            # 1. Profile Picture - check for any profile image
             try:
-                pic = self.driver.find_element(By.CSS_SELECTOR, "img[alt$=\"'s profile picture\"]")
-                src = pic.get_attribute('src')
-                if 'ig_cache_key=YW5vbnltb3VzX3Byb2ZpbGVfcGlj' in src:
-                    features['profile_pic'] = 0  # Default picture
-                else:
-                    features['profile_pic'] = 1  # Custom picture
-            except NoSuchElementException:
-                features['profile_pic'] = 0
+                images = self.driver.find_elements(By.TAG_NAME, "img")
+                for img in images:
+                    src = img.get_attribute('src') or ""
+                    alt = img.get_attribute('alt') or ""
+                    if 'profile' in alt.lower() or 'avatar' in src.lower():
+                        features['profile_pic'] = 1
+                        break
+            except:
+                pass
 
-            # 2. Username metrics - YOUR ORIGINAL LOGIC
+            # 2. Username metrics
             uname_cleaned = re.sub(r'[^\w]', '', username)
             num_digits_un = sum(c.isdigit() for c in uname_cleaned)
             len_un = len(uname_cleaned)
             features['nums_per_len_username'] = round(num_digits_un / len_un, 2) if len_un else 0
 
-            # 3-5. Full Name Analysis - YOUR ORIGINAL LOGIC
+            # 3-5. Full Name
             full_name = ""
             try:
-                selectors = [
-                    "//header//div[2]//span",
-                    "//header//h1", 
-                    "//header//div[contains(@class, '_aacx')]//span",
-                    "//header//div[contains(@class, '_aacl')]",
-                    "//header//div[contains(@class, '_aac')]//span[1]",
+                # Look for header elements that might contain the name
+                header_selectors = [
+                    "header h1",
+                    "header span",
+                    "header div",
+                    "section h1",
+                    "main h1"
                 ]
                 
-                full_name_raw = ""
-                
-                for selector in selectors:
+                for selector in header_selectors:
                     try:
-                        element = self.driver.find_element(By.XPATH, selector)
-                        text = element.text.strip()
-                        
-                        if (text and 
-                            not text.startswith('#') and
-                            "posts" not in text.lower() and
-                            "followers" not in text.lower() and
-                            "following" not in text.lower() and
-                            1 < len(text) < 50):
-                            
-                            full_name_raw = text
+                        elements = self.driver.find_elements(By.CSS_SELECTOR, selector)
+                        for element in elements:
+                            text = element.text.strip()
+                            if (text and 
+                                len(text) > 1 and 
+                                len(text) < 50 and 
+                                text.lower() != username.lower() and
+                                not any(word in text.lower() for word in ['posts', 'followers', 'following'])):
+                                full_name = text
+                                break
+                        if full_name:
                             break
-                            
-                    except NoSuchElementException:
+                    except:
                         continue
-                
-                if full_name_raw:
-                    if uname_cleaned and uname_cleaned.lower() in full_name_raw.lower():
-                        pattern = r'\s*' + re.escape(uname_cleaned) + r'\s*$'
-                        full_name = re.sub(pattern, '', full_name_raw, flags=re.IGNORECASE).strip()
-                    else:
-                        full_name = full_name_raw
-                    
-                    if len(full_name.split()) > 2:
-                        full_name = " ".join(full_name.split()[:2])
-                else:
-                    full_name = ""
-                    
-            except Exception as e:
-                logger.error(f"Full name extraction error: {e}")
-                full_name = ""
+            except:
+                pass
+
+            # Clean the name
+            if uname_cleaned.lower() in full_name.lower():
+                full_name = re.sub(uname_cleaned, '', full_name, flags=re.IGNORECASE).strip()
+            
+            # Limit to 2 words max
+            words = full_name.split()
+            if len(words) > 2:
+                full_name = " ".join(words[:2])
 
             features['words_fullname'] = len(full_name.split())
             num_digits_fn = sum(c.isdigit() for c in full_name)
@@ -225,84 +269,88 @@ class InstagramAnalyzer:
             features['nums_per_len_fullname'] = round(num_digits_fn / len_fn, 2) if len_fn else 0
             features['name_eq_username'] = 1 if full_name.replace(" ", "").lower() == username.lower() else 0
 
-            # 6. Description length - YOUR ORIGINAL LOGIC
+            # 6. Description length - look for bio text
             try:
-                bio = self.driver.find_element(By.CSS_SELECTOR, "._ap3a._aaco._aacu._aacx._aad7._aade")
-                description = bio.get_attribute("innerText")
-                features['desc_len'] = len(description)
-            except NoSuchElementException:
+                # Get all text content and find the longest span (likely bio)
+                spans = self.driver.find_elements(By.TAG_NAME, "span")
+                bio_text = ""
+                for span in spans:
+                    text = span.text.strip()
+                    if (len(text) > len(bio_text) and 
+                        len(text) < 500 and 
+                        text != full_name and 
+                        text != username and
+                        not any(word in text.lower() for word in ['posts', 'followers', 'following'])):
+                        bio_text = text
+                
+                features['desc_len'] = len(bio_text)
+            except:
                 features['desc_len'] = 0
 
-            # 7. External URL - YOUR ORIGINAL LOGIC
+            # 7. External URL
             try:
-                url_el = self.driver.find_element(By.XPATH, "//div[contains(@class,'x3nfvp2')]//a[@href]")
-                features['has_url'] = 1 if url_el.text.strip() != "" else 0
-            except NoSuchElementException:
+                links = self.driver.find_elements(By.TAG_NAME, "a")
+                for link in links:
+                    href = link.get_attribute('href') or ""
+                    text = link.text or ""
+                    if (href and 
+                        'instagram.com' not in href and 
+                        not href.startswith('#') and
+                        len(text) > 0):
+                        features['has_url'] = 1
+                        break
+            except:
                 features['has_url'] = 0
 
-            # 8. Private account - YOUR ORIGINAL LOGIC
+            # 8. Private account
+            page_text = self.driver.page_source.lower()
+            features['is_private'] = 1 if 'private' in page_text and 'account' in page_text else 0
+
+            # 9-11. Stats - parse numbers from page
             try:
-                self.driver.find_element(By.XPATH, "//span[text()=\"This account is private\"]")
-                features['is_private'] = 1
-            except NoSuchElementException:
-                features['is_private'] = 0
-
-            # 9-11. Posts, Followers, Following - YOUR ORIGINAL LOGIC
-            def get_stat(kind):
-                try:
-                    if kind == "posts":
-                        el = self.driver.find_element(By.XPATH, "//div[span[contains(text(),'posts')]]//span/span")
-                    elif kind == "followers":
-                        el = self.driver.find_element(By.XPATH, "//a[contains(@href,'followers')]//span/span")
-                    elif kind == "following":
-                        el = self.driver.find_element(By.XPATH, "//a[contains(@href,'following')]//span/span")
-                    else:
-                        return 0
-
-                    txt = el.get_attribute("title") or el.text
-                    txt = txt.replace(',', '').upper()
-
-                    num_match = re.search(r'[\d\.]+', txt)
-                    if not num_match:
-                        return 0
-
-                    num = float(num_match.group())
-
-                    if 'K' in txt:
-                        return int(num * 1000)
-                    elif 'M' in txt:
-                        return int(num * 1000000)
-                    return int(num)
-
-                except Exception as e:
-                    logger.error(f"Error parsing {kind}: {e}")
-                    return 0
-
-            features['num_posts'] = get_stat("posts")
-            features['num_followers'] = get_stat("followers")
-            features['num_follows'] = get_stat("following")
+                # Look for numbers in the page that could be stats
+                numbers = re.findall(r'(\d+\.?\d*[KkMm]?)\s*(posts|followers|following)', self.driver.page_source, re.IGNORECASE)
+                
+                for number_str, label in numbers:
+                    count = self.parse_count(number_str)
+                    if 'post' in label.lower():
+                        features['num_posts'] = count
+                    elif 'follower' in label.lower():
+                        features['num_followers'] = count
+                    elif 'following' in label.lower():
+                        features['num_follows'] = count
+            except:
+                pass
 
             return features
             
         except Exception as e:
             logger.error(f"Feature extraction error: {str(e)}")
-            # Return default features on error
-            return {
-                'profile_pic': 0,
-                'nums_per_len_username': 0,
-                'words_fullname': 0,
-                'nums_per_len_fullname': 0,
-                'name_eq_username': 0,
-                'desc_len': 0,
-                'has_url': 0,
-                'is_private': 0,
-                'num_posts': 0,
-                'num_followers': 0,
-                'num_follows': 0
-            }
+            return features
+
+    def parse_count(self, text):
+        """Parse counts like 1.2K, 5.5M"""
+        try:
+            text = text.upper().replace(',', '').replace(' ', '')
+            
+            # Extract numbers
+            numbers = re.findall(r'[\d\.]+', text)
+            if not numbers:
+                return 0
+                
+            num = float(numbers[0])
+            
+            if 'K' in text:
+                return int(num * 1000)
+            elif 'M' in text:
+                return int(num * 1000000)
+            else:
+                return int(num)
+        except:
+            return 0
 
     def predict(self, features):
-        """Make prediction using ML model - YOUR ORIGINAL LOGIC"""
+        """Make prediction using ML model"""
         try:
             feature_list = [
                 features['profile_pic'],
@@ -349,6 +397,7 @@ def home():
     return jsonify({
         "message": "Instagram Profile Analyzer API", 
         "status": "running",
+        "version": "2.0",
         "endpoints": {
             "analyze": "POST /analyze",
             "health": "GET /health"
