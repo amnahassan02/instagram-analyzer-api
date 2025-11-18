@@ -6,6 +6,7 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.support.wait import WebDriverWait
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.chrome.service import Service
+from webdriver_manager.chrome import ChromeDriverManager
 from selenium.common.exceptions import NoSuchElementException, TimeoutException
 import os
 import time
@@ -46,7 +47,7 @@ class InstagramAnalyzer:
             self.model_loaded = False
 
     def init_driver(self):
-        """Initialize Chrome driver matching your original Edge setup"""
+        """Initialize Chrome driver with automatic ChromeDriver management"""
         try:
             chrome_options = Options()
             chrome_options.add_argument("--headless=new")
@@ -61,7 +62,8 @@ class InstagramAnalyzer:
             chrome_options.add_argument("--no-sandbox")
             chrome_options.add_argument("--disable-dev-shm-usage")
 
-            service = Service(executable_path="/usr/local/bin/chromedriver")
+            # Use webdriver-manager to automatically get correct ChromeDriver
+            service = Service(ChromeDriverManager().install())
             self.driver = webdriver.Chrome(service=service, options=chrome_options)
             
             self.driver.get("https://www.instagram.com/")
@@ -137,7 +139,6 @@ class InstagramAnalyzer:
             
             # 3. Decode the image
             base64_content = base64_data.split(',')[1]  # Strip the header
-            image_data = base64.b64decode(base64_content)
 
             # 4. Set status based on default picture check - EXACT same logic
             if 'ig_cache_key=YW5vbnltb3VzX3Byb2ZpbGVfcGlj' in src:
