@@ -46,7 +46,7 @@ class InstagramAnalyzer:
             self.model_loaded = False
 
     def init_driver(self):
-        """Initialize Chrome driver with MANUAL ChromeDriver path"""
+        """Initialize Chrome driver with manual ChromeDriver"""
         try:
             chrome_options = Options()
             chrome_options.add_argument("--headless=new")
@@ -61,7 +61,13 @@ class InstagramAnalyzer:
             chrome_options.add_argument("--no-sandbox")
             chrome_options.add_argument("--disable-dev-shm-usage")
 
-            # Use the manually installed ChromeDriver
+            # Additional stability options
+            chrome_options.add_argument("--disable-extensions")
+            chrome_options.add_argument("--disable-plugins")
+            chrome_options.add_argument("--disable-images")
+            chrome_options.add_argument("--blink-settings=imagesEnabled=false")
+
+            # Use manually installed ChromeDriver
             service = Service(executable_path="/usr/local/bin/chromedriver")
             self.driver = webdriver.Chrome(service=service, options=chrome_options)
             
@@ -136,10 +142,7 @@ class InstagramAnalyzer:
             """
             base64_data = self.driver.execute_script(js_script, pic)
             
-            # 3. Decode the image
-            base64_content = base64_data.split(',')[1]  # Strip the header
-
-            # 4. Set status based on default picture check - EXACT same logic
+            # 3. Set status based on default picture check - EXACT same logic
             if 'ig_cache_key=YW5vbnltb3VzX3Byb2ZpbGVfcGlj' in src:
                 profile_pic = 0  # Default picture
             else:
@@ -147,15 +150,14 @@ class InstagramAnalyzer:
 
             return {
                 'profile_pic': profile_pic,
-                'image_base64': base64_data,  # Return full base64 data with header
-                'image_data': base64_content  # Return just the base64 content
+                'image_base64': base64_data
             }
                 
         except NoSuchElementException:
-            return {'profile_pic': 0, 'image_base64': None, 'image_data': None}
+            return {'profile_pic': 0, 'image_base64': None}
         except Exception as e:
             logger.error(f"Error during picture extraction: {str(e)}")
-            return {'profile_pic': 0, 'image_base64': None, 'image_data': None}
+            return {'profile_pic': 0, 'image_base64': None}
 
     def extract_features(self, username):
         """EXACT replica of your feature extraction logic"""
@@ -378,7 +380,7 @@ class InstagramAnalyzer:
                 "features": features,
                 "profile_picture": {
                     "has_custom_picture": bool(pic_result['profile_pic']),
-                    "image_base64": pic_result['image_base64']  # Full base64 with data URL
+                    "image_base64": pic_result['image_base64']
                 },
                 "timestamp": datetime.now().isoformat()
             }
