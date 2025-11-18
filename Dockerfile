@@ -1,17 +1,29 @@
 FROM python:3.9-slim
 
-# Install Chrome from direct download (more reliable)
+# Install system dependencies
 RUN apt-get update && apt-get install -y \
     wget \
     curl \
+    gnupg \
     unzip \
-    && wget -q https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb \
-    && apt-get install -y ./google-chrome-stable_current_amd64.deb \
-    && rm google-chrome-stable_current_amd64.deb \
+    && wget -q -O - https://dl.google.com/linux/linux_signing_key.pub | apt-key add - \
+    && echo "deb [arch=amd64] http://dl.google.com/linux/chrome/deb/ stable main" >> /etc/apt/sources.list.d/google.list \
+    && apt-get update \
+    && apt-get install -y google-chrome-stable \
     && rm -rf /var/lib/apt/lists/*
 
-# Use webdriver-manager to automatically handle ChromeDriver version
-RUN pip install webdriver-manager
+# Get Chrome version and install matching ChromeDriver MANUALLY
+RUN CHROME_VERSION=$(google-chrome --version | grep -oP '\d+\.\d+\.\d+\.\d+') \
+    && echo "Chrome version: $CHROME_VERSION" \
+    && CHROME_MAJOR_VERSION=$(echo $CHROME_VERSION | cut -d. -f1) \
+    && echo "Chrome major version: $CHROME_MAJOR_VERSION" \
+    # Download ChromeDriver from the correct URL structure
+    && wget -q "https://storage.googleapis.com/chrome-for-testing-public/$CHROME_VERSION/linux64/chromedriver-linux64.zip" \
+    && unzip -q chromedriver-linux64.zip -d /tmp/ \
+    && mv /tmp/chromedriver-linux64/chromedriver /usr/local/bin/ \
+    && chmod +x /usr/local/bin/chromedriver \
+    && rm -rf chromedriver-linux64.zip /tmp/chromedriver-linux64 \
+    && echo "ChromeDriver installed successfully"
 
 # Set working directory
 WORKDIR /app
