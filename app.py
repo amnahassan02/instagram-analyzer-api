@@ -26,19 +26,28 @@ class InstagramAnalyzer:
         self.model = None
         self.scaler = None
         self.expected_features = None
+        self.model_loaded = False
         self.load_model()
     
     def load_model(self):
-        """Load ML model and scaler"""
+        """Load ML model and scaler with version compatibility"""
         try:
+            logger.info("Loading ML model...")
+            
+            # Load model files
             self.model = joblib.load('random_forest_model.joblib')
             self.scaler = joblib.load('scaler.joblib')
+            
             with open('feature_names.txt', 'r') as f:
                 self.expected_features = f.read().split(',')
+            
             logger.info("ML model loaded successfully")
+            self.model_loaded = True
+            
         except Exception as e:
             logger.error(f"Failed to load ML model: {str(e)}")
-            raise
+            self.model_loaded = False
+            # Don't raise exception, allow app to start without model
 
     def init_driver(self):
         """Initialize Chrome driver"""
@@ -58,11 +67,6 @@ class InstagramAnalyzer:
             # Set user agent
             ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
             chrome_options.add_argument(f"user-agent={ua}")
-            
-            # Add these for better stability
-            chrome_options.add_argument("--disable-extensions")
-            chrome_options.add_argument("--disable-plugins")
-            chrome_options.add_argument("--disable-images")
             
             self.driver = webdriver.Chrome(options=chrome_options)
             self.driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
@@ -89,26 +93,10 @@ class InstagramAnalyzer:
             # Wait for page to load
             time.sleep(3)
             
-            # Find login fields - try multiple selectors
-            selectors = [
-                "input[name='username']",
-                "input[aria-label='Phone number, username, or email']",
-                "input[placeholder='Phone number, username, or email']"
-            ]
-            
-            username_field = None
-            for selector in selectors:
-                try:
-                    username_field = WebDriverWait(self.driver, 10).until(
-                        EC.presence_of_element_located((By.CSS_SELECTOR, selector)))
-                    break
-                except:
-                    continue
-            
-            if not username_field:
-                raise Exception("Could not find username field")
-            
-            password_field = self.driver.find_element(By.CSS_SELECTOR, "input[name='password'], input[aria-label='Password'], input[placeholder='Password']")
+            # Find login fields
+            username_field = WebDriverWait(self.driver, 10).until(
+                EC.presence_of_element_located((By.NAME, "username")))
+            password_field = self.driver.find_element(By.NAME, "password")
             
             username_field.send_keys(username)
             time.sleep(1)
@@ -117,7 +105,7 @@ class InstagramAnalyzer:
             password_field.send_keys(Keys.ENTER)
             
             logger.info("Login submitted")
-            time.sleep(8)  # Wait longer for login
+            time.sleep(8)
             
             # Check if login was successful
             if "login" in self.driver.current_url.lower():
@@ -127,7 +115,7 @@ class InstagramAnalyzer:
             # Handle pop-ups
             try:
                 not_now_btn = WebDriverWait(self.driver, 10).until(
-                    EC.element_to_be_clickable((By.XPATH, "//button[contains(., 'Not Now') or contains(., 'Not now')]")))
+                    EC.element_to_be_clickable((By.XPATH, "//button[contains(., 'Not Now')]")))
                 not_now_btn.click()
                 logger.info("Clicked 'Not Now' on pop-up")
                 time.sleep(2)
@@ -138,55 +126,7 @@ class InstagramAnalyzer:
             
         except Exception as e:
             logger.error(f"Login failed: {str(e)}")
-            # Take screenshot for debugging
-            try:
-                self.driver.save_screenshot("/tmp/login_error.png")
-            except:
-                pass
             return False
-
-    def analyze_profile(self, username):
-        """Main analysis function"""
-        try:
-            # Initialize driver if not already done
-            if not self.driver:
-                if not self.init_driver():
-                    return {"error": "Failed to initialize browser"}
-            
-            # Login if needed
-            login_success = self.login()
-            if not login_success:
-                return {"error": "Failed to login to Instagram. Check credentials."}
-            
-            # Navigate to profile
-            profile_url = f"https://www.instagram.com/{username}/"
-            self.driver.get(profile_url)
-            time.sleep(5)
-            
-            # Check if profile exists
-            page_source = self.driver.page_source
-            if "Sorry, this page isn't available." in page_source:
-                return {"error": "Profile not found or doesn't exist"}
-            
-            if "Page Not Found" in page_source:
-                return {"error": "Profile not found"}
-            
-            # Extract features
-            features = self.extract_features(username)
-            
-            # Make prediction
-            prediction = self.predict(features)
-            
-            return {
-                "username": username,
-                "analysis": prediction,
-                "features": features,
-                "timestamp": datetime.now().isoformat()
-            }
-            
-        except Exception as e:
-            logger.error(f"Analysis failed: {str(e)}")
-            return {"error": f"Analysis failed: {str(e)}"}
 
     def extract_features(self, username):
         """Extract profile features"""
@@ -205,13 +145,13 @@ class InstagramAnalyzer:
         }
         
         try:
-            # 1. Profile Picture - check for any profile image
+            # 1. Profile Picture
             try:
                 images = self.driver.find_elements(By.TAG_NAME, "img")
                 for img in images:
                     src = img.get_attribute('src') or ""
                     alt = img.get_attribute('alt') or ""
-                    if 'profile' in alt.lower() or 'avatar' in src.lower():
+                    if 'profile' in alt.lower() or 's150x150' in src:
                         features['profile_pic'] = 1
                         break
             except:
@@ -226,31 +166,17 @@ class InstagramAnalyzer:
             # 3-5. Full Name
             full_name = ""
             try:
-                # Look for header elements that might contain the name
-                header_selectors = [
-                    "header h1",
-                    "header span",
-                    "header div",
-                    "section h1",
-                    "main h1"
-                ]
-                
-                for selector in header_selectors:
-                    try:
-                        elements = self.driver.find_elements(By.CSS_SELECTOR, selector)
-                        for element in elements:
-                            text = element.text.strip()
-                            if (text and 
-                                len(text) > 1 and 
-                                len(text) < 50 and 
-                                text.lower() != username.lower() and
-                                not any(word in text.lower() for word in ['posts', 'followers', 'following'])):
-                                full_name = text
-                                break
-                        if full_name:
-                            break
-                    except:
-                        continue
+                # Look for header elements
+                header = self.driver.find_element(By.TAG_NAME, "header")
+                spans = header.find_elements(By.TAG_NAME, "span")
+                for span in spans:
+                    text = span.text.strip()
+                    if (text and 
+                        len(text) > 1 and 
+                        len(text) < 50 and 
+                        text.lower() != username.lower()):
+                        full_name = text
+                        break
             except:
                 pass
 
@@ -269,9 +195,8 @@ class InstagramAnalyzer:
             features['nums_per_len_fullname'] = round(num_digits_fn / len_fn, 2) if len_fn else 0
             features['name_eq_username'] = 1 if full_name.replace(" ", "").lower() == username.lower() else 0
 
-            # 6. Description length - look for bio text
+            # 6. Description length
             try:
-                # Get all text content and find the longest span (likely bio)
                 spans = self.driver.find_elements(By.TAG_NAME, "span")
                 bio_text = ""
                 for span in spans:
@@ -279,8 +204,7 @@ class InstagramAnalyzer:
                     if (len(text) > len(bio_text) and 
                         len(text) < 500 and 
                         text != full_name and 
-                        text != username and
-                        not any(word in text.lower() for word in ['posts', 'followers', 'following'])):
+                        text != username):
                         bio_text = text
                 
                 features['desc_len'] = len(bio_text)
@@ -292,11 +216,10 @@ class InstagramAnalyzer:
                 links = self.driver.find_elements(By.TAG_NAME, "a")
                 for link in links:
                     href = link.get_attribute('href') or ""
-                    text = link.text or ""
                     if (href and 
                         'instagram.com' not in href and 
                         not href.startswith('#') and
-                        len(text) > 0):
+                        len(link.text) > 0):
                         features['has_url'] = 1
                         break
             except:
@@ -306,9 +229,9 @@ class InstagramAnalyzer:
             page_text = self.driver.page_source.lower()
             features['is_private'] = 1 if 'private' in page_text and 'account' in page_text else 0
 
-            # 9-11. Stats - parse numbers from page
+            # 9-11. Stats
             try:
-                # Look for numbers in the page that could be stats
+                # Look for numbers in the page
                 numbers = re.findall(r'(\d+\.?\d*[KkMm]?)\s*(posts|followers|following)', self.driver.page_source, re.IGNORECASE)
                 
                 for number_str, label in numbers:
@@ -333,7 +256,6 @@ class InstagramAnalyzer:
         try:
             text = text.upper().replace(',', '').replace(' ', '')
             
-            # Extract numbers
             numbers = re.findall(r'[\d\.]+', text)
             if not numbers:
                 return 0
@@ -351,6 +273,15 @@ class InstagramAnalyzer:
 
     def predict(self, features):
         """Make prediction using ML model"""
+        if not self.model_loaded:
+            return {
+                'is_fake': False,
+                'authenticity_score': 5,
+                'confidence': 0.5,
+                'verdict': "MODEL_NOT_LOADED",
+                'note': "ML model failed to load, using default score"
+            }
+        
         try:
             feature_list = [
                 features['profile_pic'],
@@ -383,21 +314,66 @@ class InstagramAnalyzer:
         except Exception as e:
             logger.error(f"Prediction failed: {str(e)}")
             return {
-                'is_fake': True,
-                'authenticity_score': 0,
-                'confidence': 0.0,
-                'verdict': "ERROR"
+                'is_fake': False,
+                'authenticity_score': 5,
+                'confidence': 0.5,
+                'verdict': "PREDICTION_ERROR"
             }
 
-# Global analyzer instance
-analyzer = InstagramAnalyzer()
+    def analyze_profile(self, username):
+        """Main analysis function"""
+        try:
+            # Initialize driver if not already done
+            if not self.driver:
+                if not self.init_driver():
+                    return {"error": "Failed to initialize browser"}
+            
+            # Login if needed
+            login_success = self.login()
+            if not login_success:
+                return {"error": "Failed to login to Instagram. Check credentials."}
+            
+            # Navigate to profile
+            profile_url = f"https://www.instagram.com/{username}/"
+            self.driver.get(profile_url)
+            time.sleep(5)
+            
+            # Check if profile exists
+            page_source = self.driver.page_source
+            if "Sorry, this page isn't available." in page_source:
+                return {"error": "Profile not found or doesn't exist"}
+            
+            # Extract features
+            features = self.extract_features(username)
+            
+            # Make prediction
+            prediction = self.predict(features)
+            
+            return {
+                "username": username,
+                "analysis": prediction,
+                "features": features,
+                "timestamp": datetime.now().isoformat()
+            }
+            
+        except Exception as e:
+            logger.error(f"Analysis failed: {str(e)}")
+            return {"error": f"Analysis failed: {str(e)}"}
+
+# Global analyzer instance - but don't crash if model fails
+try:
+    analyzer = InstagramAnalyzer()
+except Exception as e:
+    logger.error(f"Failed to initialize analyzer: {str(e)}")
+    analyzer = None
 
 @app.route('/')
 def home():
+    model_status = "loaded" if analyzer and analyzer.model_loaded else "failed"
     return jsonify({
         "message": "Instagram Profile Analyzer API", 
         "status": "running",
-        "version": "2.0",
+        "model_status": model_status,
         "endpoints": {
             "analyze": "POST /analyze",
             "health": "GET /health"
@@ -406,11 +382,19 @@ def home():
 
 @app.route('/health')
 def health():
-    return jsonify({"status": "healthy", "timestamp": datetime.now().isoformat()})
+    model_status = "loaded" if analyzer and analyzer.model_loaded else "failed"
+    return jsonify({
+        "status": "healthy", 
+        "model_status": model_status,
+        "timestamp": datetime.now().isoformat()
+    })
 
 @app.route('/analyze', methods=['POST'])
 def analyze():
     """Main analysis endpoint"""
+    if not analyzer:
+        return jsonify({"error": "Analyzer not initialized"}), 500
+        
     try:
         data = request.get_json()
         
