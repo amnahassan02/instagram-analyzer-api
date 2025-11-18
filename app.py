@@ -6,7 +6,6 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.support.wait import WebDriverWait
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.chrome.service import Service
-from webdriver_manager.chrome import ChromeDriverManager
 from selenium.common.exceptions import NoSuchElementException, TimeoutException
 import os
 import time
@@ -47,7 +46,7 @@ class InstagramAnalyzer:
             self.model_loaded = False
 
     def init_driver(self):
-        """Initialize Chrome driver with automatic ChromeDriver management"""
+        """Initialize Chrome driver with MANUAL ChromeDriver path"""
         try:
             chrome_options = Options()
             chrome_options.add_argument("--headless=new")
@@ -62,8 +61,8 @@ class InstagramAnalyzer:
             chrome_options.add_argument("--no-sandbox")
             chrome_options.add_argument("--disable-dev-shm-usage")
 
-            # Use webdriver-manager to automatically handle ChromeDriver version
-            service = Service(ChromeDriverManager().install())
+            # Use the manually installed ChromeDriver
+            service = Service(executable_path="/usr/local/bin/chromedriver")
             self.driver = webdriver.Chrome(service=service, options=chrome_options)
             
             self.driver.get("https://www.instagram.com/")
